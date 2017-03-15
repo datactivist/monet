@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Donnez des couleurs à vos analyses</title>
+    <meta charset="utf-8">
+    <meta name="author" content="Joël Gombin, datactivi.st" />
+    <link href="libs/remark-css/example.css" rel="stylesheet" />
+  </head>
+  <body>
+    <textarea id="source">
+
+
+
+
+
+
+
+class: inverse, center, middle
+background-image: url(./img/monet.jpg)
+
+# Donnez des couleurs&lt;/BR&gt;à vos analyses
+## avec Monet(DBLite)
+
+&lt;/BR&gt;
+&lt;/BR&gt;
+
+### Joël Gombin
+### datactivi.st/monet
+
+
+
+---
+class: inverse, center, middle
+
+# Le problème
+
+---
+
+## Le problème
+
+- R charge les données en mémoire vive.
+- Jeux de données de quelques Go : qu'en faire ?
+- réponses standard : 
+  - outils logiciels dédiées (`bigmemory` etc.)
+  - acheter plus de RAM / utiliser une machine dédiée
+  - utiliser du hardware et/ou software dédié (Hadoop, Spark, etc.)
+
+=&gt; compliquées à mettre en œuvre
+
+
+
+---
+## L'approche par les bases de données
+
+Une possibilité : ne pas charger les données en mémoire vive, mais les stocker dans une base de données SQL.
+
+Avantages :
+- on ne charge en mémoire que ce dont on a besoin
+- on utilise l'optimisation du moteur de la BDD
+- données peuvent être utilisées par plusieurs logiciels de manière concurrente
+- etc.
+
+---
+## L'approche par les bases de données
+
+Inconvénients :
+- si on veut une BDD décente (ex : PostgreSQL), le paramétrage et surtout l'optimisation (index, etc.) ne sont pas triviaux
+- les BDD classiques (i.e. row-based) sont optimisées pour écrire et lire quelques lignes souvent (ex : backend d'un site de e-commerce), pas des bouts entiers rarement comme on fait quand on analyse des jeux de données
+- et donc c'est leeeeeeent
+
+---
+
+
+```r
+library(RPostgreSQL)
+library(tidyverse)
+library(microbenchmark)
+
+source("./credentials.R")
+con &lt;- src_postgres("RP2011", user = user, password = password)
+
+
+indcvi &lt;- tbl(con, "fd_indcvi_2011")
+psq &lt;- function() {
+  indcvi %&gt;%
+    filter(dept == "75") %&gt;% 
+    collect()
+  }
+
+microbenchmark(psq(), times = 10)
+```
+
+```
+## Unit: seconds
+##   expr      min       lq     mean median       uq      max neval
+##  psq() 11.01953 11.13416 11.60923 11.398 11.44741 14.29003    10
+```
+
+
+
+
+---
+class: inverse, center, middle
+
+# Une solution
+
+---
+class: center, middle
+
+## Une solution possible
+
+MonetDBLite
+
+---
+## C'est quoi ?
+
+- une base de données orientée colonnes (stockage physique des données optimisé pour lecture par colonnes), [MonetDB](https://www.monetdb.org/Home) open source.
+- une intégration R portable, [MonetDBLite](https://github.com/hannesmuehleisen/MonetDBLite)
+- donc aucune dépendance ni installation externe, simple installation de package : `install.packages("MonetDBLite")`
+- pas de paramétrage externe, complètement portable et reproductible 
+- on peut copier/coller le dossier de la BDD sur une clé USB, etc. 
+- intégré au process R donc transfert de données très rapide.
+
+---
+
+
+```r
+library(MonetDBLite)
+con2 &lt;- src_monetdblite("~/monetdb")
+
+con2
+```
+
+```
+## src:  MonetDBLite 0.3.2 (/home/joel/monetdb)
+## tbls: appartenance_geo_communes_14, appartenance_geo_communes_15,
+##   "appartenance-geo-communes-16", bpe_2015, "cantonales_1992_T1_communes",
+##   "cantonales_1994_T1_communes", "cantonales_1998_T1_communes",
+##   "cantonales_2001_T1_communes", "européennes_1994_T1_communes",
+##   "européennes_1999_T1_communes", "législatives_1993_T1_communes",
+##   "législatives_1997_T1_communes", "législatives_2002_T1_communes",
+##   "nomenclature-supracommunal-16", "présidentielle_1995_T1_communes",
+##   "présidentielle_2002_T1_communes", "présidentielle_2002_T2_communes",
+##   "regionales_1998_T1_départements", rp_ind_6808, rp_ind_6811,
+##   rp_ind_6812, rp_indcvi_2011, rp_indcvi_2012, rp_indreg_2011,
+##   rp_indreg_2013, rp_log_2011, rp_migcom_2013, rp_migdep_2013,
+##   rp_miggco_2013, rp_mobpro_2011, rp_mobpro_2013, rp_mobsco_2011,
+##   rp_mobsco_2013, rp_mobzelt_2011, rp_mobzelt_2013, sirene
+```
+
+---
+
+
+```r
+indcvi &lt;- tbl(con2, "rp_indcvi_2011")
+mdb &lt;- function() {
+  indcvi %&gt;%
+    filter(dept == "75") %&gt;% 
+    collect()
+}
+microbenchmark(mdb(), times = 10)
+```
+
+```
+## Unit: seconds
+##   expr      min       lq     mean   median       uq      max neval
+##  mdb() 1.910094 1.952317 2.069061 1.970892 2.096389 2.720147    10
+```
+
+---
+class: center, middle, inverse
+
+# Cas d'usages
+
+---
+# Les fichiers détails du recensement
+
+
+---
+background-image: url(./img/detail.png)
+background-size: cover
+background-position: 50% 50%
+class: center, bottom, inverse
+
+---
+## Les fichiers détails du recensement
+
+Fichier harmonisé 1968-2013 : 18 variables, 38,7 M de lignes
+
+Fichier individus région 2012 : 98 variables, 20 M de lignes
+
+---
+## Automatiser le processus 
+
+https://github.com/joelgombin/insee2monetdb
+
+Prend en entrée une URL de fichier détail, renvoie un tbl basé sur une base monetdb
+
+
+```r
+library(Insee2MonetDB)
+rp2012 &lt;- Insee2MonetDB("https://www.insee.fr/fr/statistiques/fichier/2409379/rp2013_indreg_txt.zip", folder = "./monetdb", tablename = "rp_ind_reg_2013", weight = "IPONDI")
+```
+
+
+---
+## Automatiser le processus
+
+http://www.asdfree.com/ fait le même genre de choses pour des dizaines de jeux de données utilisés en sciences sociales.
+
+---
+## Un autre cas : le SIRENE
+
+- la base SIRENE, ouverte au 1er janvier 2017
+- un CSV de ~ 8 Go
+
+---
+class: small
+
+```r
+library(DBI)
+
+url_base &lt;- "http://212.47.238.202/geo_sirene/2016-12/geo-sirene_"
+tmp &lt;- tempdir()
+conn &lt;- src_monetdblite("~/monetdb")
+for (i in c(str_pad(c(1:19, 21:95), width = 2, side = "left", pad = "0"), 
+            "2A", "2B")) {
+  download.file(paste0(url_base, i, ".csv.7z"), 
+                destfile = paste0(tmp, "/geo-sirene_", i, ".csv.7z"))
+  system(paste0('7z e -o', tmp, " ", tmp, "/geo-sirene_", i, ".csv.7z"))
+  tmp_csv &lt;- read_csv(paste0(tmp, "/geo-sirene_", i, ".csv"), na = c("NR", "NN"), 
+                      col_types = cols(.default = col_character(),
+                                        longitude = col_double(),
+                                        latitude = col_double(),
+                                        geo_score = col_double(),
+                                        geo_type = col_character(),
+                                        geo_adresse = col_character(),
+                                        geo_id = col_character(),
+                                        geo_ligne = col_character()
+                                       )
+                      )
+  sirene &lt;- dbWriteTable(conn$obj, "sirene", tmp_csv, append = TRUE)
+  rm(tmp_csv)
+  gc()
+}
+```
+
+---
+class:small
+
+
+```r
+sirene &lt;- tbl(conn, from = "sirene")
+appartenance &lt;- tbl(conn, from = "appartenance-geo-communes-16") 
+nomenclature &lt;- tbl(conn, from = "nomenclature-supracommunal-16") %&gt;% 
+  collect()
+metropole &lt;- appartenance %&gt;% 
+  filter(EPCI == "200054807") 
+
+sirene_metropole &lt;- sirene %&gt;% 
+  mutate(CODGEO = DEPET %||% COMET) %&gt;% 
+  inner_join(metropole, by = c("CODGEO" = "CODGEO"))
+```
+
+---
+class:center, middle
+##Le résultat
+
+https://joelgombin.github.io/chronique_siren/chronique.html
+
+---
+background-image: url(./img/carte.png)
+background-size: cover
+background-position: 50% 50%
+class: center, bottom, inverse
+
+
+
+---
+## Tips and tricks
+
+- utiliser MonetDBLite pour faire des jointures de grandes tables (`*_join`)
+- MonetDBLite n'a pas (encore) de capacités spatiales (MonetDB, si)
+- mais grâce au package `sf`, on peut stocker les données spatiales comme texte : permet de subsetter à l'import et de faire la jointure en dehors de R : très utile pour gros jeux de données spatiales (OSM anyone ?)
+
+---
+class: center, middle, inverse
+# Questions ?
+
+---
+class: center, middle
+
+# Merci !
+
+Slides created via the R package [**xaringan**](https://github.com/yihui/xaringan).
+
+The chakra comes from [remark.js](https://remarkjs.com), [**knitr**](http://yihui.name/knitr), and [R Markdown](https://rmarkdown.rstudio.com).
+    </textarea>
+<script src="libs/remark-latest.min.js"></script>
+<script>var slideshow = remark.create({
+"highlightStyle": "github",
+"highlightLines": true,
+"countIncrementalSlides": false
+});
+if (window.HTMLWidgets) slideshow.on('showSlide', function (slide) {setTimeout(function() {window.dispatchEvent(new Event('resize'));}, 100)});</script>
+
+  </body>
+</html>

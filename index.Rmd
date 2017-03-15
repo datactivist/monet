@@ -1,0 +1,278 @@
+---
+title: "Donnez des couleurs à vos analyses"
+subtitle: "avec Monet(DB)"
+author: "Joël Gombin, datactivi.st"
+date: "http://datactivi.st/monetdb"
+output:
+  xaringan::moon_reader:
+    seal: FALSE
+    chakra: libs/remark-latest.min.js
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+
+```{r setup, include=FALSE}
+options(htmltools.dir.version = FALSE)
+knitr::opts_chunk$set(cache = TRUE)
+```
+
+
+```{r packages, include=FALSE, cache=FALSE}
+library(RPostgreSQL)
+library(microbenchmark)
+library(MonetDBLite)
+library(tidyverse)
+```
+
+class: inverse, center, middle
+background-image: url(./img/monet.jpg)
+
+# Donnez des couleurs</BR>à vos analyses
+## avec Monet(DBLite)
+
+</BR>
+</BR>
+
+### Joël Gombin
+### datactivi.st/monet
+
+
+
+---
+class: inverse, center, middle
+
+# Le problème
+
+---
+
+## Le problème
+
+- R charge les données en mémoire vive.
+- Jeux de données de quelques Go : qu'en faire ?
+- réponses standard : 
+  - outils logiciels dédiées (`bigmemory` etc.)
+  - acheter plus de RAM / utiliser une machine dédiée
+  - utiliser du hardware et/ou software dédié (Hadoop, Spark, etc.)
+
+=> compliquées à mettre en œuvre
+
+
+
+---
+## L'approche par les bases de données
+
+Une possibilité : ne pas charger les données en mémoire vive, mais les stocker dans une base de données SQL.
+
+Avantages :
+- on ne charge en mémoire que ce dont on a besoin
+- on utilise l'optimisation du moteur de la BDD
+- données peuvent être utilisées par plusieurs logiciels de manière concurrente
+- etc.
+
+---
+## L'approche par les bases de données
+
+Inconvénients :
+- si on veut une BDD décente (ex : PostgreSQL), le paramétrage et surtout l'optimisation (index, etc.) ne sont pas triviaux
+- les BDD classiques (i.e. row-based) sont optimisées pour écrire et lire quelques lignes souvent (ex : backend d'un site de e-commerce), pas des bouts entiers rarement comme on fait quand on analyse des jeux de données
+- et donc c'est leeeeeeent
+
+---
+
+```{r}
+library(RPostgreSQL)
+library(tidyverse)
+library(microbenchmark)
+
+source("./credentials.R")
+con <- src_postgres("RP2011", user = user, password = password)
+
+
+indcvi <- tbl(con, "fd_indcvi_2011")
+psq <- function() {
+  indcvi %>%
+    filter(dept == "75") %>% 
+    collect()
+  }
+
+microbenchmark(psq(), times = 10)
+
+```
+
+
+
+
+---
+class: inverse, center, middle
+
+# Une solution
+
+---
+class: center, middle
+
+## Une solution possible
+
+MonetDBLite
+
+---
+## C'est quoi ?
+
+- une base de données orientée colonnes (stockage physique des données optimisé pour lecture par colonnes), [MonetDB](https://www.monetdb.org/Home) open source.
+- une intégration R portable, [MonetDBLite](https://github.com/hannesmuehleisen/MonetDBLite)
+- donc aucune dépendance ni installation externe, simple installation de package : `install.packages("MonetDBLite")`
+- pas de paramétrage externe, complètement portable et reproductible 
+- on peut copier/coller le dossier de la BDD sur une clé USB, etc. 
+- intégré au process R donc transfert de données très rapide.
+
+---
+
+```{r}
+library(MonetDBLite)
+con2 <- src_monetdblite("~/monetdb")
+
+con2
+```
+
+---
+
+```{r}
+indcvi <- tbl(con2, "rp_indcvi_2011")
+mdb <- function() {
+  indcvi %>%
+    filter(dept == "75") %>% 
+    collect()
+}
+microbenchmark(mdb(), times = 10)
+```
+
+---
+class: center, middle, inverse
+
+# Cas d'usages
+
+---
+# Les fichiers détails du recensement
+
+
+---
+background-image: url(./img/detail.png)
+background-size: cover
+background-position: 50% 50%
+class: center, bottom, inverse
+
+---
+## Les fichiers détails du recensement
+
+Fichier harmonisé 1968-2013 : 18 variables, 38,7 M de lignes
+
+Fichier individus région 2012 : 98 variables, 20 M de lignes
+
+---
+## Automatiser le processus 
+
+https://github.com/joelgombin/insee2monetdb
+
+Prend en entrée une URL de fichier détail, renvoie un tbl basé sur une base monetdb
+
+```{r, eval = FALSE}
+
+library(Insee2MonetDB)
+rp2012 <- Insee2MonetDB("https://www.insee.fr/fr/statistiques/fichier/2409379/rp2013_indreg_txt.zip", folder = "./monetdb", tablename = "rp_ind_reg_2013", weight = "IPONDI")
+
+```
+
+
+---
+## Automatiser le processus
+
+http://www.asdfree.com/ fait le même genre de choses pour des dizaines de jeux de données utilisés en sciences sociales.
+
+---
+## Un autre cas : le SIRENE
+
+- la base SIRENE, ouverte au 1er janvier 2017
+- un CSV de ~ 8 Go
+
+---
+class: small
+```{r, eval=FALSE}
+library(DBI)
+
+url_base <- "http://212.47.238.202/geo_sirene/2016-12/geo-sirene_"
+tmp <- tempdir()
+conn <- src_monetdblite("~/monetdb")
+for (i in c(str_pad(c(1:19, 21:95), width = 2, side = "left", pad = "0"), 
+            "2A", "2B")) {
+  download.file(paste0(url_base, i, ".csv.7z"), 
+                destfile = paste0(tmp, "/geo-sirene_", i, ".csv.7z"))
+  system(paste0('7z e -o', tmp, " ", tmp, "/geo-sirene_", i, ".csv.7z"))
+  tmp_csv <- read_csv(paste0(tmp, "/geo-sirene_", i, ".csv"), na = c("NR", "NN"), 
+                      col_types = cols(.default = col_character(),
+                                        longitude = col_double(),
+                                        latitude = col_double(),
+                                        geo_score = col_double(),
+                                        geo_type = col_character(),
+                                        geo_adresse = col_character(),
+                                        geo_id = col_character(),
+                                        geo_ligne = col_character()
+                                       )
+                      )
+  sirene <- dbWriteTable(conn$obj, "sirene", tmp_csv, append = TRUE)
+  rm(tmp_csv)
+  gc()
+}
+```
+
+---
+class:small
+
+```{r, eval=FALSE}
+sirene <- tbl(conn, from = "sirene")
+appartenance <- tbl(conn, from = "appartenance-geo-communes-16") 
+nomenclature <- tbl(conn, from = "nomenclature-supracommunal-16") %>% 
+  collect()
+metropole <- appartenance %>% 
+  filter(EPCI == "200054807") 
+
+sirene_metropole <- sirene %>% 
+  mutate(CODGEO = DEPET %||% COMET) %>% 
+  inner_join(metropole, by = c("CODGEO" = "CODGEO"))
+
+```
+
+---
+class:center, middle
+##Le résultat
+
+https://joelgombin.github.io/chronique_siren/chronique.html
+
+---
+background-image: url(./img/carte.png)
+background-size: cover
+background-position: 50% 50%
+class: center, bottom, inverse
+
+
+
+---
+## Tips and tricks
+
+- utiliser MonetDBLite pour faire des jointures de grandes tables (`*_join`)
+- MonetDBLite n'a pas (encore) de capacités spatiales (MonetDB, si)
+- mais grâce au package `sf`, on peut stocker les données spatiales comme texte : permet de subsetter à l'import et de faire la jointure en dehors de R : très utile pour gros jeux de données spatiales (OSM anyone ?)
+
+---
+class: center, middle, inverse
+# Questions ?
+
+---
+class: center, middle
+
+# Merci !
+
+Slides created via the R package [**xaringan**](https://github.com/yihui/xaringan).
+
+The chakra comes from [remark.js](https://remarkjs.com), [**knitr**](http://yihui.name/knitr), and [R Markdown](https://rmarkdown.rstudio.com).
